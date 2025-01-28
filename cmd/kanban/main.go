@@ -19,10 +19,29 @@ const (
 	done
 )
 
+var (
+	columnStyle = lipgloss.NewStyle().
+			Padding(1, 2)
+	focusedStyle = lipgloss.NewStyle().
+			Padding(1, 2).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("62"))
+	helpStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("241"))
+)
+
 type Task struct {
 	status      status
 	title       string
 	description string
+}
+
+func (t *Task) Next() {
+	if t.status == done {
+		t.status = todo
+	} else {
+		t.status++
+	}
 }
 
 func (t Task) FilterValue() string {
@@ -38,18 +57,44 @@ func (t Task) Description() string {
 }
 
 type Model struct {
-	loaded  bool
-	focused status
-	lists   []list.Model
-	err     error
+	loaded   bool
+	focused  status
+	lists    []list.Model
+	err      error
+	quitting bool
 }
 
 func New() *Model {
 	return &Model{}
 }
 
+func (m *Model) MoveToNext() tea.Msg {
+	selectedItem := m.lists[m.focused].SelectedItem()
+	selectedTask := selectedItem.(Task)
+	m.lists[selectedTask.status].RemoveItem(m.lists[m.focused].Index())
+	selectedTask.Next()
+	m.lists[selectedTask.status].InsertItem(len(m.lists[selectedTask.status].Items())-1, list.Item(selectedTask))
+	return nil
+}
+
+func (m *Model) Next() {
+	if m.focused == done {
+		m.focused = todo
+	} else {
+		m.focused++
+	}
+}
+
+func (m *Model) Prev() {
+	if m.focused == todo {
+		m.focused = done
+	} else {
+		m.focused--
+	}
+}
+
 func (m *Model) initLists(width, height int) {
-	defaultList := list.New([]list.Item{}, list.NewDefaultDelegate(), width/divisor, height)
+	defaultList := list.New([]list.Item{}, list.NewDefaultDelegate(), width/divisor, height/2)
 	defaultList.SetShowHelp(false)
 	m.lists = []list.Model{defaultList, defaultList, defaultList}
 
@@ -79,8 +124,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		if !m.loaded {
+			columnStyle.Width(msg.Width / divisor)
+			focusedStyle.Width(msg.Width / divisor)
+			columnStyle.Height(msg.Height - divisor)
+			focusedStyle.Height(msg.Height - divisor)
 			m.initLists(msg.Width, msg.Height)
 			m.loaded = true
+		}
+	case tea.KeyMsg:
+		switch msg.String() {
+		case "ctrl+c", "q":
+			m.quitting = true
+			return m, tea.Quit
+		case "left", "h":
+			m.Prev()
+		case "right", "l":
+			m.Next()
+		case "enter":
+			return m, m.MoveToNext
 		}
 	}
 
@@ -90,13 +151,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
+	if m.quitting {
+		return ""
+	}
+
 	if m.loaded {
-		return lipgloss.JoinHorizontal(
-			lipgloss.Left,
-			m.lists[todo].View(),
-			m.lists[inProgress].View(),
-			m.lists[done].View(),
-		)
+		todoView := m.lists[todo].View()
+		inProgressView := m.lists[inProgress].View()
+		doneView := m.lists[done].View()
+		switch m.focused {
+		case inProgress:
+			return lipgloss.JoinHorizontal(
+				lipgloss.Left,
+				columnStyle.Render(todoView),
+				focusedStyle.Render(inProgressView),
+				columnStyle.Render(doneView))
+		case done:
+			return lipgloss.JoinHorizontal(
+				lipgloss.Left,
+				columnStyle.Render(todoView),
+				columnStyle.Render(inProgressView),
+				focusedStyle.Render(doneView))
+		default:
+			return lipgloss.JoinHorizontal(
+				lipgloss.Left,
+				focusedStyle.Render(todoView),
+				columnStyle.Render(inProgressView),
+				columnStyle.Render(doneView))
+		}
 	} else {
 		return "loading..."
 	}
